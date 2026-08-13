@@ -1,3 +1,4 @@
-name = "markdown-worker"
+# wrangler.toml
+name = 'cf-markdown'
 main = "_worker.js"
 compatibility_date = "2024-01-01"
