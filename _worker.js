@@ -119,7 +119,7 @@ export default {
           // 忽略
         }
 
-        // 使用绝对 URL 重定向到编辑页（新建后跳转编辑，更新后跳转查看）
+        // 使用绝对 URL 重定向
         const redirectPath = finalContent ? `/doc/${encodeURIComponent(id)}` : `/edit/${encodeURIComponent(id)}`;
         const redirectUrl = new URL(redirectPath, request.url).toString();
         return Response.redirect(redirectUrl, 302);
@@ -149,7 +149,8 @@ export default {
         } catch (e) {
           // 忽略
         }
-        return Response.redirect('/admin', 302);
+        const redirectUrl = new URL('/admin', request.url).toString();
+        return Response.redirect(redirectUrl, 302);
       } catch (err) {
         return new Response('删除失败: ' + err.message + '\n' + err.stack, {
           status: 500,
@@ -169,7 +170,6 @@ export default {
         if (!prefix) {
           return new Response('prefix 不能为空', { status: 400 });
         }
-        // 查找所有匹配的文档 ID
         const likePattern = `${prefix}%`;
         const { results } = await env.DB.prepare(
           'SELECT id FROM documents WHERE id LIKE ?'
@@ -184,7 +184,8 @@ export default {
         }
         // 执行删除
         await env.DB.prepare('DELETE FROM documents WHERE id LIKE ?').bind(likePattern).run();
-        return Response.redirect('/admin', 302);
+        const redirectUrl = new URL('/admin', request.url).toString();
+        return Response.redirect(redirectUrl, 302);
       } catch (err) {
         return new Response('删除文件夹失败: ' + err.message + '\n' + err.stack, {
           status: 500,
@@ -267,13 +268,6 @@ function handleWelcomePage() {
     }
     .btn:hover {
       background: var(--primary-hover);
-    }
-    .btn-secondary {
-      background: #e2e8f0;
-      color: var(--text);
-    }
-    .btn-secondary:hover {
-      background: #cbd5e1;
     }
   </style>
 </head>
@@ -388,25 +382,11 @@ function renderLoginPage(errorMsg = '') {
 </html>`;
 }
 
-// 管理面板
+// 管理面板（树形文件夹展示）
 async function handleAdminPanel(env) {
   const { results } = await env.DB.prepare('SELECT id FROM documents ORDER BY id').all();
-  const listItems = results.map(row => {
-    const id = row.id;
-    return `
-    <li class="doc-item">
-      <span class="doc-id">${escapeHtml(id)}</span>
-      <div class="actions">
-        <a href="/doc/${encodeURIComponent(id)}" class="btn btn-small">查看</a>
-        <a href="/edit/${encodeURIComponent(id)}" class="btn btn-small btn-edit">编辑</a>
-        <a href="/raw/${encodeURIComponent(id)}" class="btn btn-small btn-download">下载</a>
-        <form method="POST" action="/delete" class="inline-form" onsubmit="return confirm('确定删除该文档吗？');">
-          <input type="hidden" name="id" value="${escapeHtml(id)}">
-          <button type="submit" class="btn btn-small btn-delete">删除</button>
-        </form>
-      </div>
-    </li>`;
-  }).join('');
+  const docIds = results.map(r => r.id);
+  const docIdsJson = JSON.stringify(docIds);
 
   const html = `<!DOCTYPE html>
 <html>
@@ -422,6 +402,7 @@ async function handleAdminPanel(env) {
       --card-bg: #ffffff;
       --text: #1e293b;
       --text-secondary: #64748b;
+      --border: #e2e8f0;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -463,49 +444,101 @@ async function handleAdminPanel(env) {
     .card h2 {
       margin-bottom: 1rem;
       font-size: 1.25rem;
-      border-bottom: 1px solid #e2e8f0;
+      border-bottom: 1px solid var(--border);
       padding-bottom: 0.5rem;
     }
-    ul.doc-list {
+    .tree {
       list-style: none;
+      padding-left: 0;
     }
-    .doc-item {
+    .tree ul {
+      list-style: none;
+      padding-left: 1.5rem;
+      border-left: 1px dashed #cbd5e1;
+      margin-left: 0.75rem;
+    }
+    .folder-header {
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      padding: 0.75rem 0;
-      border-bottom: 1px solid #f1f5f9;
-      gap: 1rem;
+      cursor: pointer;
+      padding: 0.4rem 0;
+      gap: 0.5rem;
+      font-weight: 500;
+      user-select: none;
     }
-    .doc-item:last-child { border-bottom: none; }
-    .doc-id { font-weight: 500; word-break: break-all; }
-    .actions { display: flex; gap: 0.5rem; flex-shrink: 0; flex-wrap: wrap; }
+    .folder-header:hover {
+      background: #f1f5f9;
+      border-radius: 4px;
+    }
+    .folder-icon {
+      transition: transform 0.2s;
+      display: inline-block;
+    }
+    .folder-icon.open {
+      transform: rotate(90deg);
+    }
+    .folder-name {
+      margin-right: auto;
+    }
+    .folder-delete-btn {
+      background: #ef4444;
+      color: white;
+      border: none;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+    .folder-delete-btn:hover {
+      background: #dc2626;
+    }
+    .file-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.4rem 0;
+      border-bottom: 1px solid #f1f5f9;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .file-id {
+      font-weight: normal;
+      word-break: break-all;
+    }
+    .file-actions {
+      display: flex;
+      gap: 0.25rem;
+      flex-shrink: 0;
+    }
     .btn {
       display: inline-block;
       background: var(--primary);
       color: white;
-      padding: 0.5rem 1rem;
+      padding: 0.35rem 0.75rem;
       border-radius: 6px;
       text-decoration: none;
-      font-size: 0.875rem;
-      transition: background 0.2s;
+      font-size: 0.8rem;
       border: none;
       cursor: pointer;
+      transition: background 0.2s;
     }
     .btn:hover { background: var(--primary-hover); }
-    .btn-small { padding: 0.35rem 0.75rem; }
     .btn-edit { background: #f59e0b; }
     .btn-edit:hover { background: #d97706; }
     .btn-download { background: #10b981; }
     .btn-download:hover { background: #059669; }
     .btn-delete { background: #ef4444; }
     .btn-delete:hover { background: #dc2626; }
+    .empty {
+      color: var(--text-secondary);
+      text-align: center;
+      padding: 2rem;
+    }
     form {
       display: flex;
       flex-direction: column;
       gap: 0.75rem;
     }
-    .inline-form { display: inline; margin: 0; }
     label { font-weight: 500; }
     input[type="text"] {
       width: 100%;
@@ -526,29 +559,10 @@ async function handleAdminPanel(env) {
       transition: background 0.2s;
     }
     button[type="submit"]:hover { background: var(--primary-hover); }
-    .empty { color: var(--text-secondary); text-align: center; padding: 2rem; }
-    .folder-form {
-      display: flex;
-      gap: 0.5rem;
-      align-items: center;
-    }
-    .folder-form input[type="text"] {
-      flex: 1;
-      padding: 0.5rem;
-    }
-    .folder-form button {
-      padding: 0.5rem 1rem;
-      background: #ef4444;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-    }
-    .folder-form button:hover { background: #dc2626; }
+    .inline-form { display: inline; margin: 0; }
     @media (max-width: 600px) {
-      .doc-item { flex-direction: column; align-items: flex-start; }
-      .actions { width: 100%; justify-content: flex-start; }
-      .folder-form { flex-direction: column; }
+      .file-item { flex-direction: column; align-items: flex-start; }
+      .file-actions { width: 100%; justify-content: flex-start; }
     }
   </style>
 </head>
@@ -558,30 +572,110 @@ async function handleAdminPanel(env) {
       <h1>📚 文档管理</h1>
       <a href="/admin/logout" class="logout">退出登录</a>
     </header>
+
     <div class="card">
-      <h2>已有文档</h2>
-      <ul class="doc-list">${listItems || '<p class="empty">暂无文档</p>'}</ul>
+      <h2>文档列表</h2>
+      <div id="tree-container"></div>
     </div>
+
     <div class="card">
       <h2>新建文档</h2>
       <form method="POST" action="/doc">
-        <label for="id">文档 ID（可包含路径，如 docs/guide）：</label>
+        <label for="id">文档 ID（可包含路径，如 docs/guide/intro）</label>
         <input type="text" id="id" name="id" required placeholder="例如：docs/guide/intro">
         <input type="hidden" name="content" value="">
         <button type="submit">新建</button>
       </form>
     </div>
-    <div class="card">
-      <h2>删除文件夹</h2>
-      <form method="POST" action="/delete-folder" class="folder-form" onsubmit="return confirm('确定删除该文件夹下所有文档吗？此操作不可恢复！');">
-        <input type="text" name="prefix" required placeholder="输入文件夹前缀，如 docs/">
-        <button type="submit">删除文件夹</button>
-      </form>
-      <p style="margin-top:0.5rem; font-size:0.875rem; color:var(--text-secondary);">
-        提示：文件夹以 ID 前缀区分。例如 ID 为 <code>docs/guide</code> 的文档属于 <code>docs/</code> 文件夹。
-      </p>
-    </div>
   </div>
+
+  <script>
+    const docIds = ${docIdsJson};
+    const container = document.getElementById('tree-container');
+    if (docIds.length === 0) {
+      container.innerHTML = '<p class="empty">暂无文档</p>';
+    } else {
+      container.innerHTML = buildTreeHTML(docIds);
+      // 绑定折叠事件
+      document.querySelectorAll('.folder-header').forEach(header => {
+        header.addEventListener('click', function(e) {
+          // 如果点击的是删除按钮，不触发折叠
+          if (e.target.classList.contains('folder-delete-btn')) return;
+          const folder = this.parentElement;
+          const children = folder.querySelector('ul');
+          const icon = this.querySelector('.folder-icon');
+          if (children) {
+            children.style.display = children.style.display === 'none' ? 'block' : 'none';
+            icon.classList.toggle('open');
+          }
+        });
+      });
+    }
+
+    function buildTreeHTML(ids) {
+      const tree = {};
+      for (const id of ids) {
+        const parts = id.split('/');
+        let current = tree;
+        parts.forEach((part, index) => {
+          const isFile = index === parts.length - 1;
+          if (!current[part]) {
+            current[part] = { name: part, isFile, children: {} };
+          } else {
+            // 如果之前被标记为文件，但遇到重复，覆盖为文件夹？不会发生
+          }
+          current = current[part].children;
+        });
+      }
+
+      function renderNode(node, prefix = '') {
+        if (node.isFile) {
+          // 叶子节点：文件
+          const fullId = prefix ? prefix + '/' + node.name : node.name;
+          return `<li class="file-item">
+            <span class="file-id">${escapeHtml(node.name)}</span>
+            <div class="file-actions">
+              <a href="/doc/${encodeURIComponent(fullId)}" class="btn">查看</a>
+              <a href="/edit/${encodeURIComponent(fullId)}" class="btn btn-edit">编辑</a>
+              <a href="/raw/${encodeURIComponent(fullId)}" class="btn btn-download">下载</a>
+              <form method="POST" action="/delete" class="inline-form" onsubmit="return confirm('确定删除该文档吗？');">
+                <input type="hidden" name="id" value="${escapeHtml(fullId)}">
+                <button type="submit" class="btn btn-delete">删除</button>
+              </form>
+            </div>
+          </li>`;
+        } else {
+          // 文件夹节点
+          const fullPath = prefix ? prefix + '/' + node.name : node.name;
+          const childrenHtml = Object.values(node.children).map(child => renderNode(child, fullPath)).join('');
+          const folderPrefix = fullPath + '/';
+          return `<li class="folder">
+            <div class="folder-header" data-prefix="${escapeHtml(folderPrefix)}">
+              <span class="folder-icon">▶</span>
+              <span class="folder-name">📁 ${escapeHtml(node.name)}</span>
+              <form method="POST" action="/delete-folder" class="inline-form" onsubmit="event.stopPropagation(); return confirm('确定删除该文件夹下所有文档吗？此操作不可恢复！');">
+                <input type="hidden" name="prefix" value="${escapeHtml(folderPrefix)}">
+                <button type="submit" class="folder-delete-btn">删除文件夹</button>
+              </form>
+            </div>
+            <ul style="display: none;">${childrenHtml}</ul>
+          </li>`;
+        }
+      }
+
+      const rootChildren = Object.values(tree).map(node => renderNode(node, '')).join('');
+      return '<ul class="tree">' + rootChildren + '</ul>';
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+  </script>
 </body>
 </html>`;
   return new Response(html, {
@@ -990,6 +1084,15 @@ async function handleEditPage(id, env) {
       // 初始渲染
       updatePreview();
     })();
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
   </script>
 </body>
 </html>`;
