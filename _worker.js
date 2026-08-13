@@ -116,7 +116,8 @@ export default {
         } catch (e) {
           // 忽略
         }
-        return Response.redirect(`/doc/${encodeURIComponent(id)}`, 302);
+        const redirectUrl = new URL(`/doc/${encodeURIComponent(id)}`, request.url).toString();
+        return Response.redirect(redirectUrl, 302);
       } catch (err) {
         // 调试用：返回具体错误
         return new Response('保存失败: ' + err.message + '\n' + err.stack, {
