@@ -838,8 +838,7 @@ async function handleEditPage(id, env) {
       <div class="editor-wrapper">
         <div class="editor-pane">
           <h2>Markdown 编辑器</h2>
-          <textarea id="content" name="content" required
-            oninput="updatePreview()">${escapeHtml(content)}</textarea>
+          <textarea id="content" name="content" required>${escapeHtml(content)}</textarea>
         </div>
         <div class="preview-pane">
           <h2>实时预览</h2>
@@ -852,24 +851,43 @@ async function handleEditPage(id, env) {
       </div>
     </form>
   </div>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script>
+  <script src="https://unpkg.com/marked@12.0.2/marked.min.js"></script>
+<script>
+  (function() {
     // 初始化 marked
     if (window.marked) {
       window.marked.setOptions({ gfm: true, breaks: false });
     }
+
     function updatePreview() {
-      const input = document.getElementById('content').value;
+      const input = document.getElementById('content');
       const preview = document.getElementById('preview');
+      if (!input || !preview) return;
+      const text = input.value;
       if (window.marked) {
-        preview.innerHTML = window.marked.parse(input);
+        try {
+          preview.innerHTML = window.marked.parse(text);
+        } catch (err) {
+          preview.textContent = '预览出错：' + err.message;
+        }
       } else {
-        preview.textContent = input;
+        // Fallback: 显示纯文本，同时提示加载失败
+        preview.textContent = text;
+        preview.style.color = '#999';
+        preview.innerHTML = '<p style="color:red;">Markdown 解析库加载失败，请检查网络后刷新页面。</p><pre>' + escapeHtml(text) + '</pre>';
       }
     }
+
+    // 绑定输入事件
+    const textarea = document.getElementById('content');
+    if (textarea) {
+      textarea.addEventListener('input', updatePreview);
+    }
+
     // 初始渲染
     updatePreview();
-  </script>
+  })();
+</script>
 </body>
 </html>`;
   return new Response(html, {
