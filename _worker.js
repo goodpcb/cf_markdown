@@ -12,7 +12,7 @@ export default {
     const path = url.pathname;
     const method = request.method;
 
-    // CORS 预检
+    // CORS 预检（可选）
     if (method === 'OPTIONS') {
       return new Response(null, {
         headers: {
@@ -100,13 +100,15 @@ export default {
         const formData = await request.formData();
         const id = formData.get('id') || '';
         const content = formData.get('content') || '';
-        if (!id || !content) {
-          return new Response('id 和 content 均不能为空', { status: 400 });
+        if (!id) {
+          return new Response('id 不能为空', { status: 400 });
         }
+        const finalContent = content || '';
+
         const stmt = env.DB.prepare(
           `INSERT INTO documents (id, content) VALUES (?, ?)
            ON CONFLICT(id) DO UPDATE SET content = excluded.content`
-        ).bind(id, content);
+        ).bind(id, finalContent);
         await stmt.run();
 
         // 清除 KV 缓存
@@ -116,11 +118,75 @@ export default {
         } catch (e) {
           // 忽略
         }
-        const redirectUrl = new URL(`/doc/${encodeURIComponent(id)}`, request.url).toString();
+
+        // 使用绝对 URL 重定向到编辑页（新建后跳转编辑，更新后跳转查看）
+        const redirectPath = finalContent ? `/doc/${encodeURIComponent(id)}` : `/edit/${encodeURIComponent(id)}`;
+        const redirectUrl = new URL(redirectPath, request.url).toString();
         return Response.redirect(redirectUrl, 302);
       } catch (err) {
-        // 调试用：返回具体错误
         return new Response('保存失败: ' + err.message + '\n' + err.stack, {
+          status: 500,
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        });
+      }
+    }
+
+    // 删除单个文档（需登录）
+    if (path === '/delete' && method === 'POST') {
+      if (!isLoggedIn(request)) {
+        return new Response('Unauthorized', { status: 401 });
+      }
+      try {
+        const formData = await request.formData();
+        const id = formData.get('id') || '';
+        if (!id) {
+          return new Response('id 不能为空', { status: 400 });
+        }
+        await env.DB.prepare('DELETE FROM documents WHERE id = ?').bind(id).run();
+        // 清除 KV 缓存
+        try {
+          await env.KV.delete(`doc:${id}`);
+        } catch (e) {
+          // 忽略
+        }
+        return Response.redirect('/admin', 302);
+      } catch (err) {
+        return new Response('删除失败: ' + err.message + '\n' + err.stack, {
+          status: 500,
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        });
+      }
+    }
+
+    // 删除文件夹（需登录）
+    if (path === '/delete-folder' && method === 'POST') {
+      if (!isLoggedIn(request)) {
+        return new Response('Unauthorized', { status: 401 });
+      }
+      try {
+        const formData = await request.formData();
+        const prefix = formData.get('prefix') || '';
+        if (!prefix) {
+          return new Response('prefix 不能为空', { status: 400 });
+        }
+        // 查找所有匹配的文档 ID
+        const likePattern = `${prefix}%`;
+        const { results } = await env.DB.prepare(
+          'SELECT id FROM documents WHERE id LIKE ?'
+        ).bind(likePattern).all();
+        // 删除 KV 缓存
+        for (const row of results) {
+          try {
+            await env.KV.delete(`doc:${row.id}`);
+          } catch (e) {
+            // 忽略
+          }
+        }
+        // 执行删除
+        await env.DB.prepare('DELETE FROM documents WHERE id LIKE ?').bind(likePattern).run();
+        return Response.redirect('/admin', 302);
+      } catch (err) {
+        return new Response('删除文件夹失败: ' + err.message + '\n' + err.stack, {
           status: 500,
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         });
@@ -217,7 +283,6 @@ function handleWelcomePage() {
     <p class="subtitle">一个简单的 Markdown 文档管理服务</p>
     <div>
       <a href="/admin" class="btn">🔐 管理员登录</a>
-      <a href="/doc/示例文档" class="btn btn-secondary">查看示例</a>
     </div>
   </div>
 </body>
@@ -326,15 +391,22 @@ function renderLoginPage(errorMsg = '') {
 // 管理面板
 async function handleAdminPanel(env) {
   const { results } = await env.DB.prepare('SELECT id FROM documents ORDER BY id').all();
-  const listItems = results.map(row => `
+  const listItems = results.map(row => {
+    const id = row.id;
+    return `
     <li class="doc-item">
-      <span class="doc-id">${escapeHtml(row.id)}</span>
+      <span class="doc-id">${escapeHtml(id)}</span>
       <div class="actions">
-        <a href="/doc/${encodeURIComponent(row.id)}" class="btn btn-small">查看</a>
-        <a href="/edit/${encodeURIComponent(row.id)}" class="btn btn-small btn-edit">编辑</a>
-        <a href="/raw/${encodeURIComponent(row.id)}" class="btn btn-small btn-download">下载</a>
+        <a href="/doc/${encodeURIComponent(id)}" class="btn btn-small">查看</a>
+        <a href="/edit/${encodeURIComponent(id)}" class="btn btn-small btn-edit">编辑</a>
+        <a href="/raw/${encodeURIComponent(id)}" class="btn btn-small btn-download">下载</a>
+        <form method="POST" action="/delete" class="inline-form" onsubmit="return confirm('确定删除该文档吗？');">
+          <input type="hidden" name="id" value="${escapeHtml(id)}">
+          <button type="submit" class="btn btn-small btn-delete">删除</button>
+        </form>
       </div>
-    </li>`).join('');
+    </li>`;
+  }).join('');
 
   const html = `<!DOCTYPE html>
 <html>
@@ -407,7 +479,7 @@ async function handleAdminPanel(env) {
     }
     .doc-item:last-child { border-bottom: none; }
     .doc-id { font-weight: 500; word-break: break-all; }
-    .actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
+    .actions { display: flex; gap: 0.5rem; flex-shrink: 0; flex-wrap: wrap; }
     .btn {
       display: inline-block;
       background: var(--primary);
@@ -426,13 +498,16 @@ async function handleAdminPanel(env) {
     .btn-edit:hover { background: #d97706; }
     .btn-download { background: #10b981; }
     .btn-download:hover { background: #059669; }
+    .btn-delete { background: #ef4444; }
+    .btn-delete:hover { background: #dc2626; }
     form {
       display: flex;
       flex-direction: column;
       gap: 0.75rem;
     }
+    .inline-form { display: inline; margin: 0; }
     label { font-weight: 500; }
-    input[type="text"], textarea {
+    input[type="text"] {
       width: 100%;
       padding: 0.75rem;
       border: 1px solid #cbd5e1;
@@ -440,7 +515,6 @@ async function handleAdminPanel(env) {
       font-size: 1rem;
       font-family: inherit;
     }
-    textarea { height: 200px; resize: vertical; }
     button[type="submit"] {
       background: var(--primary);
       color: white;
@@ -453,9 +527,28 @@ async function handleAdminPanel(env) {
     }
     button[type="submit"]:hover { background: var(--primary-hover); }
     .empty { color: var(--text-secondary); text-align: center; padding: 2rem; }
+    .folder-form {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    .folder-form input[type="text"] {
+      flex: 1;
+      padding: 0.5rem;
+    }
+    .folder-form button {
+      padding: 0.5rem 1rem;
+      background: #ef4444;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .folder-form button:hover { background: #dc2626; }
     @media (max-width: 600px) {
       .doc-item { flex-direction: column; align-items: flex-start; }
       .actions { width: 100%; justify-content: flex-start; }
+      .folder-form { flex-direction: column; }
     }
   </style>
 </head>
@@ -472,12 +565,21 @@ async function handleAdminPanel(env) {
     <div class="card">
       <h2>新建文档</h2>
       <form method="POST" action="/doc">
-        <label for="id">文档 ID：</label>
-        <input type="text" id="id" name="id" required placeholder="例如：my-first-doc">
-        <label for="content">Markdown 内容：</label>
-        <textarea id="content" name="content" required placeholder="输入 Markdown..."></textarea>
-        <button type="submit">保存</button>
+        <label for="id">文档 ID（可包含路径，如 docs/guide）：</label>
+        <input type="text" id="id" name="id" required placeholder="例如：docs/guide/intro">
+        <input type="hidden" name="content" value="">
+        <button type="submit">新建</button>
       </form>
+    </div>
+    <div class="card">
+      <h2>删除文件夹</h2>
+      <form method="POST" action="/delete-folder" class="folder-form" onsubmit="return confirm('确定删除该文件夹下所有文档吗？此操作不可恢复！');">
+        <input type="text" name="prefix" required placeholder="输入文件夹前缀，如 docs/">
+        <button type="submit">删除文件夹</button>
+      </form>
+      <p style="margin-top:0.5rem; font-size:0.875rem; color:var(--text-secondary);">
+        提示：文件夹以 ID 前缀区分。例如 ID 为 <code>docs/guide</code> 的文档属于 <code>docs/</code> 文件夹。
+      </p>
     </div>
   </div>
 </body>
@@ -598,6 +700,8 @@ async function handleViewDoc(id, env, loggedIn) {
       transition: background 0.2s;
     }
     .btn:hover { background: var(--primary-hover); }
+    .btn-back { background: #94a3b8; }
+    .btn-back:hover { background: #64748b; }
     .btn-edit { background: #f59e0b; }
     .btn-edit:hover { background: #d97706; }
     .btn-download { background: #10b981; }
@@ -606,8 +710,6 @@ async function handleViewDoc(id, env, loggedIn) {
     .btn-export:hover { background: #7c3aed; }
     .btn-print { background: #64748b; }
     .btn-print:hover { background: #475569; }
-    .btn-back { background: #94a3b8; }
-    .btn-back:hover { background: #64748b; }
     @media print {
       .action-bar { display: none; }
       body { background: white; padding: 0; }
@@ -751,13 +853,13 @@ async function handleEditPage(id, env) {
       gap: 1.5rem;
       align-items: start;
     }
-    .editor-pane, .preview-pane {
+    .preview-pane, .editor-pane {
       background: var(--card-bg);
       border-radius: 12px;
       box-shadow: var(--shadow);
       padding: 1.5rem;
     }
-    .editor-pane h2, .preview-pane h2 {
+    .preview-pane h2, .editor-pane h2 {
       margin-bottom: 1rem;
       font-size: 1.25rem;
       color: var(--text);
@@ -842,13 +944,13 @@ async function handleEditPage(id, env) {
     <form method="POST" action="/doc" id="edit-form">
       <input type="hidden" name="id" value="${escapeHtml(id)}">
       <div class="editor-wrapper">
-        <div class="editor-pane">
-          <h2>Markdown 编辑器</h2>
-          <textarea id="content" name="content" required>${escapeHtml(content)}</textarea>
-        </div>
         <div class="preview-pane">
           <h2>实时预览</h2>
           <div id="preview" class="preview-content"></div>
+        </div>
+        <div class="editor-pane">
+          <h2>Markdown 编辑器</h2>
+          <textarea id="content" name="content" required>${escapeHtml(content)}</textarea>
         </div>
       </div>
       <div class="actions">
@@ -858,42 +960,37 @@ async function handleEditPage(id, env) {
     </form>
   </div>
   <script src="https://unpkg.com/marked@12.0.2/marked.min.js"></script>
-<script>
-  (function() {
-    // 初始化 marked
-    if (window.marked) {
-      window.marked.setOptions({ gfm: true, breaks: false });
-    }
-
-    function updatePreview() {
-      const input = document.getElementById('content');
-      const preview = document.getElementById('preview');
-      if (!input || !preview) return;
-      const text = input.value;
+  <script>
+    (function() {
       if (window.marked) {
-        try {
-          preview.innerHTML = window.marked.parse(text);
-        } catch (err) {
-          preview.textContent = '预览出错：' + err.message;
-        }
-      } else {
-        // Fallback: 显示纯文本，同时提示加载失败
-        preview.textContent = text;
-        preview.style.color = '#999';
-        preview.innerHTML = '<p style="color:red;">Markdown 解析库加载失败，请检查网络后刷新页面。</p><pre>' + escapeHtml(text) + '</pre>';
+        window.marked.setOptions({ gfm: true, breaks: false });
       }
-    }
 
-    // 绑定输入事件
-    const textarea = document.getElementById('content');
-    if (textarea) {
-      textarea.addEventListener('input', updatePreview);
-    }
+      function updatePreview() {
+        const input = document.getElementById('content');
+        const preview = document.getElementById('preview');
+        if (!input || !preview) return;
+        const text = input.value;
+        if (window.marked) {
+          try {
+            preview.innerHTML = window.marked.parse(text);
+          } catch (err) {
+            preview.innerHTML = '<p style="color:red;">预览出错：' + err.message + '</p>';
+          }
+        } else {
+          preview.innerHTML = '<p style="color:red;">Markdown 解析库加载失败，请检查网络后刷新页面。</p><pre>' + escapeHtml(text) + '</pre>';
+        }
+      }
 
-    // 初始渲染
-    updatePreview();
-  })();
-</script>
+      const textarea = document.getElementById('content');
+      if (textarea) {
+        textarea.addEventListener('input', updatePreview);
+      }
+
+      // 初始渲染
+      updatePreview();
+    })();
+  </script>
 </body>
 </html>`;
   return new Response(html, {
