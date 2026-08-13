@@ -518,8 +518,12 @@ async function handleViewDoc(id, env, loggedIn) {
     const editButton = loggedIn
       ? `<a href="/edit/${encodeURIComponent(id)}" class="btn btn-edit">✏️ 编辑</a>`
       : '';
+    const backButton = loggedIn
+      ? `<a href="/admin" class="btn btn-back">← 返回列表</a>`
+      : `<a href="/" class="btn btn-back">← 首页</a>`;
     const actionBar = `
       <div class="action-bar">
+        ${backButton}
         ${editButton}
         <a href="/raw/${encodeURIComponent(id)}" class="btn btn-download">⬇️ 下载 Markdown</a>
         <button onclick="exportHTML()" class="btn btn-export">📄 导出 HTML</button>
@@ -602,6 +606,8 @@ async function handleViewDoc(id, env, loggedIn) {
     .btn-export:hover { background: #7c3aed; }
     .btn-print { background: #64748b; }
     .btn-print:hover { background: #475569; }
+    .btn-back { background: #94a3b8; }
+    .btn-back:hover { background: #64748b; }
     @media print {
       .action-bar { display: none; }
       body { background: white; padding: 0; }
