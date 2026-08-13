@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "marked": "^12.0.0",
+    "marked": "^12.0.0"
+  },
+  "devDependencies": {
     "wrangler": "^4.0.0"
   },
   "scripts": {
