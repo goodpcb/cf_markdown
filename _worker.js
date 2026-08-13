@@ -622,44 +622,50 @@ async function handleAdminPanel(env) {
           if (!current[part]) {
             current[part] = { name: part, isFile, children: {} };
           } else {
-            // 如果之前被标记为文件，但遇到重复，覆盖为文件夹？不会发生
+            // 如果之前被标记为文件，但现在作为路径的一部分，则将其转换为文件夹
+            if (current[part].isFile && !isFile) {
+              current[part].isFile = false;
+            }
           }
           current = current[part].children;
         });
       }
 
       function renderNode(node, prefix = '') {
+        const fullId = prefix ? prefix + '/' + node.name : node.name;
         if (node.isFile) {
-          // 叶子节点：文件
-          const fullId = prefix ? prefix + '/' + node.name : node.name;
-          return `<li class="file-item">
-            <span class="file-id">${escapeHtml(node.name)}</span>
-            <div class="file-actions">
-              <a href="/doc/${encodeURIComponent(fullId)}" class="btn">查看</a>
-              <a href="/edit/${encodeURIComponent(fullId)}" class="btn btn-edit">编辑</a>
-              <a href="/raw/${encodeURIComponent(fullId)}" class="btn btn-download">下载</a>
-              <form method="POST" action="/delete" class="inline-form" onsubmit="return confirm('确定删除该文档吗？');">
-                <input type="hidden" name="id" value="${escapeHtml(fullId)}">
-                <button type="submit" class="btn btn-delete">删除</button>
-              </form>
-            </div>
-          </li>`;
+          // 文件节点
+          return '<li class="file-item">' +
+            '<span class="file-id">' + escapeHtml(node.name) + '</span>' +
+            '<div class="file-actions">' +
+              '<a href="/doc/' + encodeURIComponent(fullId) + '" class="btn">查看</a>' +
+              '<a href="/edit/' + encodeURIComponent(fullId) + '" class="btn btn-edit">编辑</a>' +
+              '<a href="/raw/' + encodeURIComponent(fullId) + '" class="btn btn-download">下载</a>' +
+              '<form method="POST" action="/delete" class="inline-form" onsubmit="return confirm(\'确定删除该文档吗？\');">' +
+                '<input type="hidden" name="id" value="' + escapeHtml(fullId) + '">' +
+                '<button type="submit" class="btn btn-delete">删除</button>' +
+              '</form>' +
+            '</div>' +
+          '</li>';
         } else {
           // 文件夹节点
           const fullPath = prefix ? prefix + '/' + node.name : node.name;
-          const childrenHtml = Object.values(node.children).map(child => renderNode(child, fullPath)).join('');
           const folderPrefix = fullPath + '/';
-          return `<li class="folder">
-            <div class="folder-header" data-prefix="${escapeHtml(folderPrefix)}">
-              <span class="folder-icon">▶</span>
-              <span class="folder-name">📁 ${escapeHtml(node.name)}</span>
-              <form method="POST" action="/delete-folder" class="inline-form" onsubmit="event.stopPropagation(); return confirm('确定删除该文件夹下所有文档吗？此操作不可恢复！');">
-                <input type="hidden" name="prefix" value="${escapeHtml(folderPrefix)}">
-                <button type="submit" class="folder-delete-btn">删除文件夹</button>
-              </form>
-            </div>
-            <ul style="display: none;">${childrenHtml}</ul>
-          </li>`;
+          let childrenHtml = '';
+          for (const child of Object.values(node.children)) {
+            childrenHtml += renderNode(child, fullPath);
+          }
+          return '<li class="folder">' +
+            '<div class="folder-header" data-prefix="' + escapeHtml(folderPrefix) + '">' +
+              '<span class="folder-icon">▶</span>' +
+              '<span class="folder-name">📁 ' + escapeHtml(node.name) + '</span>' +
+              '<form method="POST" action="/delete-folder" class="inline-form" onsubmit="event.stopPropagation(); return confirm(\'确定删除该文件夹下所有文档吗？此操作不可恢复！\');">' +
+                '<input type="hidden" name="prefix" value="' + escapeHtml(folderPrefix) + '">' +
+                '<button type="submit" class="folder-delete-btn">删除文件夹</button>' +
+              '</form>' +
+            '</div>' +
+            '<ul style="display: none;">' + childrenHtml + '</ul>' +
+          '</li>';
         }
       }
 
@@ -687,7 +693,6 @@ async function handleAdminPanel(env) {
 async function handleViewDoc(id, env, loggedIn) {
   try {
     const cacheKey = `doc:${id}`;
-    // 登录用户跳过缓存，以确保能看到编辑按钮
     if (!loggedIn) {
       try {
         const cached = await env.KV.get(cacheKey, 'text');
@@ -710,7 +715,6 @@ async function handleViewDoc(id, env, loggedIn) {
     const markdown = row.content;
     const bodyHtml = marked.parse(markdown);
 
-    // 构建操作按钮
     const editButton = loggedIn
       ? `<a href="/edit/${encodeURIComponent(id)}" class="btn btn-edit">✏️ 编辑</a>`
       : '';
@@ -860,7 +864,6 @@ async function handleViewDoc(id, env, loggedIn) {
 </body>
 </html>`;
 
-    // 未登录时缓存
     if (!loggedIn) {
       try {
         await env.KV.put(cacheKey, fullHtml, { expirationTtl: 3600 });
